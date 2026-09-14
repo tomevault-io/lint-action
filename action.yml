@@ -1,0 +1,176 @@
+name: 'TomeVault lint'
+description: 'Gate your AI instruction files in CI. Scans every CLAUDE.md, AGENTS.md, .cursor/rules, SKILL.md and similar for safety, clarity, and whether the file will load, and fails the build if anything blocks. Runs locally on your runner, no token.'
+author: 'TomeVault'
+
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  paths:
+    description: 'Space- or newline-separated files/dirs to lint. Default: auto-discover every instruction file in the repo.'
+    required: false
+    default: ''
+  strict:
+    description: 'Treat warnings as errors, so any warning fails the build.'
+    required: false
+    default: 'false'
+  max-warnings:
+    description: 'Fail once warnings exceed this count. Ignored when strict is true.'
+    required: false
+    default: ''
+  version:
+    description: 'CLI version to run: an npm dist-tag or exact version. Default "1" tracks the latest 1.x; pin an exact version (e.g. 1.8.0) for a gate that never shifts under you.'
+    required: false
+    default: '1'
+  working-directory:
+    description: 'Directory to run in. Default: the repository root.'
+    required: false
+    default: '.'
+  comment:
+    description: 'Post the verdict as a single pull-request comment that updates itself on every run. Off by default: it is the one part of this action that needs a token and talks to the GitHub API. Ignored outside a pull request.'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'Token used to post the comment, needing pull-requests:write. Only read when comment is true. Pass secrets.GITHUB_TOKEN.'
+    required: false
+    default: ''
+
+outputs:
+  passed:
+    description: 'true if the gate passed, false otherwise.'
+    value: ${{ steps.lint.outputs.passed }}
+  errors:
+    description: 'Count of error-severity findings (safety fails and load-blockers).'
+    value: ${{ steps.lint.outputs.errors }}
+  warnings:
+    description: 'Count of warning-severity findings.'
+    value: ${{ steps.lint.outputs.warnings }}
+  infos:
+    description: 'Count of info-severity advisories.'
+    value: ${{ steps.lint.outputs.infos }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run TomeVault lint
+      id: lint
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      # Inputs are passed as env vars, never interpolated into the script body,
+      # so a crafted input can't inject shell. The CLI auto-detects GITHUB_ACTIONS
+      # and emits inline annotations + a job summary + these step outputs, with
+      # no --reporter flag needed.
+      #
+      # The runner launches composite bash with -e, so a failing gate would end
+      # the job here and the comment step below would never run. That is exactly
+      # backwards: a FAILING gate is when the reviewer most needs the comment. So
+      # the exit code is captured, carried to the last step, and re-raised there.
+      env:
+        TV_PATHS: ${{ inputs.paths }}
+        TV_STRICT: ${{ inputs.strict }}
+        TV_MAX_WARNINGS: ${{ inputs.max-warnings }}
+        TV_VERSION: ${{ inputs.version }}
+        TV_COMMENT: ${{ inputs.comment }}
+      run: |
+        set +e
+        args=(lint)
+        if [ -n "$TV_PATHS" ]; then
+          for p in $TV_PATHS; do args+=("$p"); done
+        fi
+        if [ "$TV_STRICT" = "true" ]; then
+          args+=(--strict)
+        fi
+        if [ -n "$TV_MAX_WARNINGS" ]; then
+          args+=(--max-warnings "$TV_MAX_WARNINGS")
+        fi
+        if [ "$TV_COMMENT" = "true" ]; then
+          # Capability probe, not a version comparison. `version` defaults to the
+          # moving "1" tag, so a user who turns on `comment` before their pinned
+          # CLI supports the flag would otherwise get "Unknown option" and a
+          # FAILED GATE: the feature would break the very thing it reports on.
+          # Ask the CLI what it supports and degrade to a warning instead. npx
+          # caches the package, so the probe costs one extra local invocation.
+          if npx --yes "tomevault@$TV_VERSION" lint --help 2>/dev/null | grep -q -- '--comment-file'; then
+            # Staged under RUNNER_TEMP, never the workspace: a comment body written
+            # into the repo would show up as an untracked file and could be picked
+            # up by a later step that commits.
+            args+=(--comment-file "$RUNNER_TEMP/tomevault-lint-comment.md")
+          else
+            echo "::warning::comment is on, but the TomeVault CLI resolved from version '$TV_VERSION' has no --comment-file support (needs 1.8.6 or newer). Running the gate without the pull request comment."
+          fi
+        fi
+        npx --yes "tomevault@$TV_VERSION" "${args[@]}"
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Post the verdict to the pull request
+      # Only on a real PR, only when asked. A push build has no PR to comment on.
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' && inputs.github-token != '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TV_REPO: ${{ github.repository }}
+        TV_PR: ${{ github.event.pull_request.number }}
+      run: |
+        # Every failure path here is a warning, never a job failure. The gate's
+        # verdict is about the instruction files. A fork PR carries a read-only
+        # token and WILL 403 on the post: that must not turn a passing gate red.
+        set +e
+        body_file="$RUNNER_TEMP/tomevault-lint-comment.md"
+        if [ ! -f "$body_file" ]; then
+          echo "::warning::TomeVault lint produced no comment body; skipping the comment."
+          exit 0
+        fi
+
+        # Sticky: find our own previous comment by its sentinel and rewrite it,
+        # so a 30-commit PR carries one comment rather than 30.
+        #
+        # --slurp, not a bare --jq: with --paginate, gh applies --jq to EACH page
+        # and concatenates the results, so a "last match" query over a PR with
+        # more than one page of comments would emit one id per page and produce
+        # an unusable multi-line value. --slurp merges the pages first.
+        #
+        # A candidate must carry the sentinel AND be authored by a bot. Without
+        # the author test, a human who pastes the sentinel into their own comment
+        # would have it silently overwritten on the next run.
+        comments="$RUNNER_TEMP/tomevault-lint-comments.json"
+        if ! gh api "repos/$TV_REPO/issues/$TV_PR/comments" --paginate --slurp > "$comments" 2>/dev/null; then
+          echo "::warning::could not read the pull request comments; skipping the TomeVault lint comment."
+          exit 0
+        fi
+        existing=$(jq -r '
+          [ .[] | select(type == "array") | .[] ] + [ .[] | select(type == "object") ]
+          | map(select(.body? // "" | startswith("<!-- tomevault-lint -->")))
+          | map(select(.user.type? == "Bot"))
+          | last | .id // empty
+        ' "$comments" 2>/dev/null)
+
+        # Build the request body with jq rather than -F body=@file: -F applies
+        # gh's type coercion to the value, and the body is arbitrary markdown
+        # that must survive verbatim.
+        payload="$RUNNER_TEMP/tomevault-lint-payload.json"
+        jq -Rs '{body: .}' < "$body_file" > "$payload" || {
+          echo "::warning::could not encode the TomeVault lint comment body."
+          exit 0
+        }
+
+        if [ -n "$existing" ]; then
+          gh api --method PATCH "repos/$TV_REPO/issues/comments/$existing" \
+            --input "$payload" --silent \
+            || echo "::warning::could not update the TomeVault lint comment (id $existing)."
+        else
+          gh api --method POST "repos/$TV_REPO/issues/$TV_PR/comments" \
+            --input "$payload" --silent \
+            || echo "::warning::could not post the TomeVault lint comment. A fork pull request carries a read-only token, which is the usual cause."
+        fi
+        exit 0
+
+    - name: Apply the gate result
+      shell: bash
+      # Re-raise the verdict the lint step captured. Last step so the comment is
+      # always posted first, pass or fail.
+      env:
+        TV_EXIT: ${{ steps.lint.outputs.exit-code }}
+      run: exit "${TV_EXIT:-0}"
