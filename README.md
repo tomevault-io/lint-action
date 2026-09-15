@@ -1,8 +1,8 @@
 # TomeVault lint action
 
-Gate your AI instruction files in CI. This action runs [`tomevault lint`](https://www.npmjs.com/package/tomevault) over every instruction file in your repo (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/*`, `.windsurf/rules/*`, `copilot-instructions.md`, `.claude/skills/*/SKILL.md`), checks each for safety, clarity, and whether it will actually load, and fails the build if anything blocks.
+Gate your AI instruction files in CI. This action runs [`tomevault lint`](https://www.npmjs.com/package/tomevault) over every instruction file in your repo (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.cursor/rules/*`, `.windsurf/rules/*`, `copilot-instructions.md`, and any `SKILL.md`), checks each for safety, clarity, and whether it will actually load, and fails the build if anything blocks.
 
-It runs entirely on your runner. No token, no network call to us, nothing leaves the box, so it is safe on private repos. The one exception is the optional pull-request comment below, which needs a token to talk to the GitHub API. Even then, no file content leaves your repository.
+It runs on your runner. No token, and nothing is sent to TomeVault. The runner downloads the `tomevault` CLI from npm, and the scan itself makes no network calls, so it is safe on private repos. The one exception is the optional pull-request comment below, which needs a token to talk to the GitHub API. Even then, no file content leaves your repository.
 
 ## Quick start
 
@@ -28,7 +28,7 @@ The action reports a status, but a status only **blocks a merge** once you mark 
 
 1. Open **Settings → Branches → Branch protection rules** for your default branch.
 2. Enable **Require status checks to pass before merging**.
-3. Add **TomeVault lint** to the required checks.
+3. Add the job's check to the required checks. In the example above it is called `lint`.
 
 After that, a PR that introduces a load-blocker or a safety fail cannot merge until it is fixed.
 
@@ -39,7 +39,7 @@ After that, a PR that introduces a load-blocker or a safety fail cannot merge un
 | `paths` | _(whole repo)_ | Space- or newline-separated files/dirs to lint. Omit to auto-discover every instruction file. |
 | `strict` | `false` | Treat warnings as errors, so any warning fails the build. |
 | `max-warnings` | _(no limit)_ | Fail once warnings exceed this count. Ignored when `strict` is true. |
-| `version` | `1` | CLI version to run. `1` tracks the latest 1.x. Pin an exact version (e.g. `1.8.0`) for a gate that never shifts under you. |
+| `version` | `1` | CLI version to run. `1` tracks the latest 1.x. Pin an exact version (e.g. `1.8.7`) for a gate that never shifts under you. Pin 1.8.6 or newer: earlier releases can miss files. |
 | `working-directory` | `.` | Directory to run in. |
 | `comment` | `false` | Post the verdict as one pull-request comment that updates itself on every run. Needs `github-token` and CLI 1.8.6 or newer. Ignored outside a pull request. |
 | `github-token` | _(none)_ | Token used to post that comment, needing `pull-requests: write`. Only read when `comment` is true. |
@@ -51,7 +51,7 @@ After that, a PR that introduces a load-blocker or a safety fail cannot merge un
           paths: |
             CLAUDE.md
             .cursor/rules
-          version: 1.8.0
+          version: 1.8.7
 ```
 
 ## Outputs
@@ -102,13 +102,15 @@ Three things worth knowing:
 
 ## Action or service
 
-This action is the CI gate you run inside your own pipeline. It blocks a merge once you mark it required, and by default needs no token and sends nothing off your runner.
+This action is the CI gate you run inside your own pipeline. It blocks a merge once you mark it required, and by default needs no token and sends nothing to TomeVault.
 
 [TomeVault](https://tomevault.io/) is the hosted service for teams that would rather have their instruction files watched for them: continuous monitoring across every repo, with a dated record of what changed and when. Use the action for a self-hosted gate, the service for continuous cover, or both.
 
 ## Versioning
 
-The moving `v1` tag tracks the latest 1.x of this action. Pin `@v1` to get non-breaking updates automatically, or pin an exact release tag for a gate that never changes. The action's bundled CLI defaults to `tomevault@1`; override it with the `version` input.
+The moving `v1` tag tracks the latest 1.x of this action. Pin `@v1` to get non-breaking updates automatically, or pin an exact release tag. The CLI the action runs is fetched from npm and defaults to `tomevault@1`. Override it with the `version` input.
+
+A commit SHA or release tag fixes the action's own steps, not the CLI it runs. For a gate that never shifts, pin both: the action to a full commit SHA and `version` to an exact release (1.8.6 or newer).
 
 ## License
 

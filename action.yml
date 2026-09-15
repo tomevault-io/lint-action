@@ -20,7 +20,7 @@ inputs:
     required: false
     default: ''
   version:
-    description: 'CLI version to run: an npm dist-tag or exact version. Default "1" tracks the latest 1.x; pin an exact version (e.g. 1.8.0) for a gate that never shifts under you.'
+    description: 'CLI version to run: an npm dist-tag or exact version. Default "1" tracks the latest 1.x; pin an exact version (e.g. 1.8.7, and 1.8.6 or newer) for a gate that never shifts under you.'
     required: false
     default: '1'
   working-directory:
