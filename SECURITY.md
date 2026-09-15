@@ -17,4 +17,4 @@ If the problem is in the TomeVault service at tomevault.io rather than in this r
 
 ## Supported versions
 
-Only the latest release is supported. Pin the action to a full commit SHA in your workflows.
+Only the latest release is supported. The moving `v1` tag always points at it. For the strictest supply-chain posture, pin the action to a full commit SHA instead.

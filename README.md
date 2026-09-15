@@ -94,7 +94,7 @@ jobs:
 
 One comment per pull request, rewritten in place on every push, so a long-running branch does not collect a stack of them. A clean run is one line. Files are itemised only when they carry an error or a warning, and the findings fold lists the rule and the line, never the content of the file it read.
 
-Two things worth knowing:
+Three things worth knowing:
 
 - The comment is posted whether the gate passes or fails, because a failing gate is when it is most useful.
 - A pull request from a fork carries a read-only token, so the post is refused by GitHub. The action logs a warning and the gate result is unaffected.
